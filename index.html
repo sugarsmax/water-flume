@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Home Water Usage — Home</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f1117;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1rem;
+    }
+    header { text-align: center; margin-bottom: 2rem; }
+    header h1 { font-size: 1.5rem; font-weight: 600; color: #ffffff; letter-spacing: -0.02em; }
+    header p { font-size: 0.85rem; color: #888; margin-top: 0.35rem; }
+    .controls { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; }
+    .toggle-btn {
+      padding: 0.4rem 1rem; border-radius: 999px; border: 1px solid #333;
+      background: #1a1d27; color: #aaa; font-size: 0.8rem; cursor: pointer; transition: all 0.15s;
+    }
+    .toggle-btn.active { background: #1A6BFF; border-color: #1A6BFF; color: #fff; }
+    .chart-wrap {
+      width: 100%; max-width: 900px; background: #1a1d27;
+      border-radius: 12px; padding: 1.5rem; border: 1px solid #252836;
+    }
+    canvas { width: 100% !important; }
+    .legend { display: flex; gap: 1.5rem; justify-content: center; margin-top: 1.25rem; flex-wrap: wrap; }
+    .legend-item { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: #bbb; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+    footer { margin-top: 2rem; font-size: 0.75rem; color: #555; text-align: center; }
+    #status { font-size: 0.8rem; color: #666; margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Home Water Usage</h1>
+    <p>Home &mdash; Monthly totals by year</p>
+  </header>
+  <div class="controls">
+    <button class="toggle-btn active" id="btn-gallons" onclick="setUnit('gallons')">Gallons</button>
+    <button class="toggle-btn" id="btn-liters" onclick="setUnit('liters')">Liters</button>
+  </div>
+  <p id="status"></p>
+  <div class="chart-wrap">
+    <canvas id="chart" height="380"></canvas>
+    <div class="legend" id="legend"></div>
+  </div>
+  <footer>Data source: Flume Water API &mdash; generated 2026-03-03 20:53 UTC</footer>
+
+  <script>
+    const RAW_DATA = [{"year": "2024", "month": "8", "month_name": "Aug", "value_liters": 1908.3121, "value_gallons": 504.1226}, {"year": "2024", "month": "9", "month_name": "Sep", "value_liters": 16097.9463, "value_gallons": 4252.6267}, {"year": "2024", "month": "10", "month_name": "Oct", "value_liters": 6054.7732, "value_gallons": 1599.5015}, {"year": "2024", "month": "11", "month_name": "Nov", "value_liters": 8504.2956, "value_gallons": 2246.5968}, {"year": "2024", "month": "12", "month_name": "Dec", "value_liters": 10041.134, "value_gallons": 2652.5865}, {"year": "2025", "month": "1", "month_name": "Jan", "value_liters": 11509.0386, "value_gallons": 3040.3657}, {"year": "2025", "month": "2", "month_name": "Feb", "value_liters": 11806.053, "value_gallons": 3118.8286}, {"year": "2025", "month": "3", "month_name": "Mar", "value_liters": 11756.7534, "value_gallons": 3105.8051}, {"year": "2025", "month": "4", "month_name": "Apr", "value_liters": 10131.9716, "value_gallons": 2676.5832}, {"year": "2025", "month": "5", "month_name": "May", "value_liters": 8816.636, "value_gallons": 2329.1084}, {"year": "2025", "month": "6", "month_name": "Jun", "value_liters": 9316.4069, "value_gallons": 2461.1338}, {"year": "2025", "month": "7", "month_name": "Jul", "value_liters": 5120.8764, "value_gallons": 1352.7922}, {"year": "2025", "month": "8", "month_name": "Aug", "value_liters": 9333.18, "value_gallons": 2465.5648}, {"year": "2025", "month": "9", "month_name": "Sep", "value_liters": 4257.2619, "value_gallons": 1124.6494}, {"year": "2025", "month": "10", "month_name": "Oct", "value_liters": 3941.6985, "value_gallons": 1041.2864}, {"year": "2025", "month": "11", "month_name": "Nov", "value_liters": 5797.2248, "value_gallons": 1531.4645}, {"year": "2025", "month": "12", "month_name": "Dec", "value_liters": 3076.1764, "value_gallons": 812.6397}, {"year": "2026", "month": "1", "month_name": "Jan", "value_liters": 3246.4064, "value_gallons": 857.6097}, {"year": "2026", "month": "2", "month_name": "Feb", "value_liters": 6257.2666, "value_gallons": 1652.9946}, {"year": "2026", "month": "3", "month_name": "Mar", "value_liters": 159.6399, "value_gallons": 42.1724}];
+    const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const COLORS = ["#1A6BFF","#88A943","#A80C7C","#DBAE06","#008C4A","#36A5CC"];
+
+    let chartInstance = null;
+    let currentUnit = "gallons";
+
+    // Group by year -> month
+    const allData = {};
+    RAW_DATA.forEach(row => {
+      if (!allData[row.year]) allData[row.year] = {};
+      allData[row.year][parseInt(row.month)] = row;
+    });
+
+    const years = Object.keys(allData).sort();
+    document.getElementById("status").textContent =
+      RAW_DATA.length + " months of data across " + years.join(", ");
+
+    function setUnit(unit) {
+      currentUnit = unit;
+      document.getElementById("btn-gallons").classList.toggle("active", unit === "gallons");
+      document.getElementById("btn-liters").classList.toggle("active", unit === "liters");
+      renderChart();
+    }
+
+    function buildDatasets(unit) {
+      return years.map((year, i) => {
+        const byMonth = allData[year];
+        const data = MONTHS.map((_, mi) => {
+          const row = byMonth[mi + 1];
+          if (!row) return null;
+          return unit === "gallons" ? row.value_gallons : row.value_liters;
+        });
+        const color = COLORS[i % COLORS.length];
+        return {
+          label: year, data,
+          borderColor: color, backgroundColor: color + "22",
+          pointBackgroundColor: color, pointRadius: 4, pointHoverRadius: 6,
+          borderWidth: 2, tension: 0.3, spanGaps: false,
+        };
+      });
+    }
+
+    function renderChart() {
+      const unit = currentUnit;
+      const label = unit === "gallons" ? "Gallons" : "Liters";
+      const datasets = buildDatasets(unit);
+
+      if (chartInstance) {
+        chartInstance.data.datasets = datasets;
+        chartInstance.options.plugins.tooltip.callbacks.label = ctx =>
+          ` ${ctx.dataset.label}: ${ctx.parsed.y !== null
+            ? ctx.parsed.y.toLocaleString(undefined, {maximumFractionDigits: 0})
+            : "—"} ${label.toLowerCase()}`;
+        chartInstance.options.scales.y.title.text = label;
+        chartInstance.update();
+        return;
+      }
+
+      const ctx = document.getElementById("chart").getContext("2d");
+      chartInstance = new Chart(ctx, {
+        type: "line",
+        data: { labels: MONTHS, datasets },
+        options: {
+          responsive: true,
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: "#1e2130", borderColor: "#333", borderWidth: 1,
+              titleColor: "#eee", bodyColor: "#ccc",
+              callbacks: {
+                label: ctx =>
+                  ` ${ctx.dataset.label}: ${ctx.parsed.y !== null
+                    ? ctx.parsed.y.toLocaleString(undefined, {maximumFractionDigits: 0})
+                    : "—"} ${label.toLowerCase()}`
+              }
+            }
+          },
+          scales: {
+            x: { grid: { color: "#252836" }, ticks: { color: "#888" } },
+            y: {
+              beginAtZero: true,
+              grid: { color: "#252836" },
+              ticks: { color: "#888", callback: v => v.toLocaleString() },
+              title: { display: true, text: label, color: "#666", font: { size: 11 } }
+            }
+          }
+        }
+      });
+
+      // Custom legend
+      const legendEl = document.getElementById("legend");
+      legendEl.innerHTML = "";
+      years.forEach((year, i) => {
+        const color = COLORS[i % COLORS.length];
+        legendEl.innerHTML +=
+          `<div class="legend-item"><div class="legend-dot" style="background:${color}"></div><span>${year}</span></div>`;
+      });
+    }
+
+    renderChart();
+  </script>
+</body>
+</html>
