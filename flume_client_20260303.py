@@ -382,19 +382,41 @@ def fetch_monthly_year(
 
 def save_monthly_csv(rows_by_year: dict[int, list[dict]], device_id: str, dry_run: bool = False) -> int:
     """
-    Write monthly rows to water_usage_monthly.csv, skipping year+month combos already present.
+    Write monthly rows to water_usage_monthly.csv.
+    Past months are append-only (skipped if already present).
+    The current calendar month is always overwritten with the latest API value,
+    since the month is still in-progress and the stored value may be stale.
     rows_by_year: {year: [{"datetime": ..., "value": ...}, ...]}
     """
-    existing: set[tuple[str, str]] = set()
+    now = datetime.now(timezone.utc)
+    current_year = str(now.year)
+    current_month = str(now.month)
+
+    # Load existing rows. Identify which rows for this device were fetched mid-month
+    # (fetched_at year/month == the row's own year/month) — those are potentially stale
+    # partial values and must be refreshed.
+    existing_rows: list[dict] = []
+    existing_keys: set[tuple[str, str]] = set()
+    stale_keys: set[tuple[str, str]] = set()
+
     if MONTHLY_CSV_FILE.exists():
         with MONTHLY_CSV_FILE.open(newline="") as f:
             for row in csv.DictReader(f):
+                existing_rows.append(row)
                 if row.get("device_id") == str(device_id):
-                    existing.add((row["year"], row["month"]))
+                    key = (row["year"], row["month"])
+                    existing_keys.add(key)
+                    # Fetched before the month ended → value was partial
+                    try:
+                        fa = datetime.fromisoformat(row["fetched_at"].replace("Z", "+00:00"))
+                        if str(fa.year) == row["year"] and str(fa.month) == row["month"]:
+                            stale_keys.add(key)
+                    except (ValueError, KeyError):
+                        pass
 
-    write_header = not MONTHLY_CSV_FILE.exists()
     fetched_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    new_rows = []
+    new_rows: list[dict] = []
+    updated_keys: set[tuple[str, str]] = set()
 
     for year, rows in sorted(rows_by_year.items()):
         for row in rows:
@@ -402,8 +424,14 @@ def save_monthly_csv(rows_by_year: dict[int, list[dict]], device_id: str, dry_ru
             if not raw_dt:
                 continue
             month = str(datetime.strptime(raw_dt[:10], "%Y-%m-%d").month)
-            if (str(year), month) in existing:
+            key = (str(year), month)
+            is_current_month = (str(year) == current_year and month == current_month)
+
+            # Skip months already stored that were NOT fetched mid-month,
+            # unless it's the current in-progress month.
+            if key in existing_keys and key not in stale_keys and not is_current_month:
                 continue
+
             liters = round(row.get("value", 0.0), 4)
             new_rows.append({
                 "year": year,
@@ -414,23 +442,34 @@ def save_monthly_csv(rows_by_year: dict[int, list[dict]], device_id: str, dry_ru
                 "device_id": device_id,
                 "fetched_at": fetched_at,
             })
+            if key in existing_keys:
+                updated_keys.add(key)
 
     if dry_run:
-        print(f"[DRY-RUN] Would write {len(new_rows)} new monthly row(s) to {MONTHLY_CSV_FILE.name}.")
+        print(f"[DRY-RUN] Would write {len(new_rows)} monthly row(s) to {MONTHLY_CSV_FILE.name} "
+              f"({len(updated_keys)} update(s) including {len(stale_keys)} stale mid-month row(s)).")
         return len(new_rows)
 
     if not new_rows:
-        print("[MONTHLY CSV] No new rows to write — all months already present.")
+        print("[MONTHLY CSV] No new rows to write — all months already present and complete.")
         return 0
 
-    with MONTHLY_CSV_FILE.open("a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=MONTHLY_CSV_COLUMNS)
-        if write_header:
-            writer.writeheader()
-        writer.writerows(new_rows)
+    # Rebuild the CSV: drop rows being replaced, then append fresh values.
+    retained = [
+        r for r in existing_rows
+        if not (r.get("device_id") == str(device_id)
+                and (r["year"], r["month"]) in updated_keys)
+    ]
+    all_rows = retained + new_rows
 
-    skipped = sum(len(r) for r in rows_by_year.values()) - len(new_rows)
-    print(f"[MONTHLY CSV] Wrote {len(new_rows)} new row(s) to {MONTHLY_CSV_FILE.name} (skipped {skipped} duplicate(s)).")
+    with MONTHLY_CSV_FILE.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=MONTHLY_CSV_COLUMNS)
+        writer.writeheader()
+        writer.writerows(all_rows)
+
+    added = len(new_rows) - len(updated_keys)
+    print(f"[MONTHLY CSV] Wrote {len(new_rows)} row(s) to {MONTHLY_CSV_FILE.name} "
+          f"({added} new, {len(updated_keys)} updated).")
     return len(new_rows)
 
 
